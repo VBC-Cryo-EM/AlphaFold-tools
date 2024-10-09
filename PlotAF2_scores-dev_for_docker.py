@@ -11,16 +11,20 @@ import numpy as np
 import argparse
 import requests
 
-# Default root directory for all paths
+# Default root directory for all input paths
 DEFAULT_ROOT_DIR = '/groups/plaschka/shared/alphafold/HumanPPI_database'
 VOLUMES_PREFIX = '/Volumes/'
 
-# Define all paths relative to the root directory
+# Define all input paths relative to the root directory
 DATABASE_PATH = os.path.join(DEFAULT_ROOT_DIR, 'AF_scores_HumanPPI_241003.txt')
-OUTPUT_DIR = os.path.join(DEFAULT_ROOT_DIR, 'plots')
 PDB_FILE_PATH = os.path.join(DEFAULT_ROOT_DIR, 'precomputed_AF2_predictions/predictions.txt')
 PRECOMPUTED_DIR = os.path.join(DEFAULT_ROOT_DIR, 'precomputed_AF2_predictions/PDBs')
-CHIMERAX_OUTPUT_DIR = os.path.join(DEFAULT_ROOT_DIR, 'ChimeraX')
+
+# Default output directory is the user's current working directory
+DEFAULT_OUTPUT_DIR = os.getcwd()
+PLOTS_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'plots')
+HITS_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'hits')
+CHIMERAX_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'ChimeraX')
 
 # UniProt API URL for querying a UniProt ID
 UNIPROT_API_URL = "https://rest.uniprot.org/uniprotkb/{}.txt"
@@ -105,8 +109,8 @@ def write_interacting_proteins_to_file(poi_uniprot_id, POI_name, data, file_path
     db_name = os.path.basename(file_path).split('.')[0]
     # Create the file name for the text file
     file_name = f"{db_name}_{poi_uniprot_id}_{POI_name}_interacting_proteins_above_{confidence_threshold}.txt"
-    # Create the output file path, including the "POIs" folder
-    output_file_path = os.path.join(output_dir, "POIs", file_name)
+    # Create the output file path, including the "hits" folder
+    output_file_path = os.path.join(output_dir, "hits", file_name)
     # Ensure the directory exists
     os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
     # Write the interacting proteins to the file
@@ -117,6 +121,7 @@ def write_interacting_proteins_to_file(poi_uniprot_id, POI_name, data, file_path
     
     # Return the output file path
     return output_file_path
+
 
 # Optimized plotting function with UniProt descriptions for proteins above a set threshold
 def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, file_path, output_dir, pdb_file_path, score_for_descriptions=0.3, width=1200, height=800):
@@ -216,7 +221,7 @@ def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, fil
 # Function to write the POI into a text file and return the file path
 def write_poi_to_file(poi_uniprot_id, POI_name, output_dir):
     file_name = f"{poi_uniprot_id}_{POI_name}.txt"
-    poi_output_file_path = os.path.join(output_dir, "POIs", file_name)
+    poi_output_file_path = os.path.join(output_dir,  file_name)
     os.makedirs(os.path.dirname(poi_output_file_path), exist_ok=True)
     
     with open(poi_output_file_path, 'w') as f:
@@ -230,7 +235,7 @@ def generate_shell_command(poi_file_path, output_file_path, poi_uniprot_id, POI_
     command = f"/resources/colabfold/software/ht-colabfold/alphafold_batch.sh \n" \
               f"-1 {poi_file_path} \n" \
               f"-2 {output_file_path} \n" \
-              f"-O /groups/plaschka/shared/alphafold/{username}/{poi_uniprot_id}_{POI_name}_vs_hits_above_{confidence_threshold}"
+              f"-O /groups/plaschka/shared/alphafold/{username}/{POI_name}_{poi_uniprot_id}_vs_hits_above_{confidence_threshold}"
     
     # Print the command (but do not execute it)
     print("\nNote that these are only the pre-computed confidence scores. To re-compute the structures using Dominik's script, execute the following command:")
@@ -244,8 +249,8 @@ def get_chimerax_work_dir(precomputed_dir, local_path=None):
         return precomputed_dir.replace('/groups/', VOLUMES_PREFIX)
 
 # Function to generate ChimeraX script to load and align available PDBs
-def chimeraX_script(poi_uniprot_id, precomputed_dir, output_dir, available_pdbs, POI_name, local_path=None):
-    chimerax_work_dir = get_chimerax_work_dir(precomputed_dir, local_path)
+def chimeraX_script(poi_uniprot_id, precomputed_dir, output_dir, available_pdbs, POI_name, local_PDB_path=None):
+    chimerax_work_dir = get_chimerax_work_dir(precomputed_dir, local_PDB_path)
 
     chimerax_script = [f"#open Alphafold model for the POI using its uniprot ID",
                        f"alphafold fetch {poi_uniprot_id}",
@@ -294,40 +299,41 @@ def chimeraX_script(poi_uniprot_id, precomputed_dir, output_dir, available_pdbs,
 
 # Main execution logic
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Plot protein-protein interactions and output results.')
-    parser.add_argument('--poi', type=str, required=True, help='UniProt ID of the protein of interest (POI)')
-    parser.add_argument('--cutoff', type=float, default=0.5, help='Confidence score cutoff (default: 0.5)')
-    parser.add_argument('--POI_name', type=str, required=True, help='Custom name to append to the UniProt ID')
-    parser.add_argument('--root_dir', type=str, default=DEFAULT_ROOT_DIR, help=f'Root directory for all data and output (default: {DEFAULT_ROOT_DIR})')
-    parser.add_argument('--chimeraX', action='store_true', help='Generate ChimeraX script for visualizing pre-computed predictions')
-    parser.add_argument('--local_path', type=str, help='Custom working directory for ChimeraX (useful to correctly set file paths in teh ChimeraX script to execute on your local machine. This path should be set to where the pre-computed PDBs are downloaded to as seen from your local machine)')
-
+    parser = argparse.ArgumentParser(description='Plot AlphaFold2 confidence scores from http://prodata.swmed.edu/humanPPI/download for your protein of interest (POI).')
+    parser.add_argument('--poi', type=str, required=True, help='UniProt ID of  your POI')
+    parser.add_argument('--cutoff', type=float, default=0.5, help='Confidence score cutoff above which hits are written out to a text file (default: 0.5)')
+    parser.add_argument('--POI_name', type=str, required=True, help='Protein name of your POI. Will be appended to the UniProt ID in all output files')
+    parser.add_argument('--root_dir', type=str, default=DEFAULT_ROOT_DIR, help=f'Root directory for all input data (default: {DEFAULT_ROOT_DIR})')
+    parser.add_argument('--output_dir', type=str, default=DEFAULT_OUTPUT_DIR, help=f'Output directory for all generated files (default: Your current working directory)')
+    parser.add_argument('--chimeraX', action='store_true', help='Generate ChimeraX script for visualizing all available pre-computed predictions')
+    parser.add_argument('--local_PDB_path', type=str, help='Can be used to set to correctly set PDB file paths in ChimeraX scripts. This needs to match the file paths to pre-computed PDBs as seen on your local machine')
 
     args = parser.parse_args()
 
-    # Update paths based on the root directory
+    # Update paths based on the root directory and output directory
     database = os.path.join(args.root_dir, 'AF_scores_HumanPPI_241003.txt')
-    output_dir = os.path.join(args.root_dir, 'plots')
     pdb_file = os.path.join(args.root_dir, 'precomputed_AF2_predictions/predictions.txt')
     precomputed_dir = os.path.join(args.root_dir, 'precomputed_AF2_predictions/PDBs')
-    chimerax_output_dir = os.path.join(args.root_dir, 'ChimeraX')
+    plots_output_dir = os.path.join(args.output_dir, 'plots')
+    hits_output_dir = os.path.join(args.output_dir, 'hits')
+    chimerax_output_dir = os.path.join(args.output_dir, 'ChimeraX')
 
     # Load data once
     data = pd.read_csv(database, sep="\t", header=None, names=["Protein_Pair", "Score"])
     data[['Protein1', 'Protein2']] = data['Protein_Pair'].str.split('_', expand=True)
 
     # Run the plot function
-    available_pdbs = plot_poi_predictions_with_density_jitter(args.poi, args.POI_name, data, database, output_dir, pdb_file)
+    available_pdbs = plot_poi_predictions_with_density_jitter(args.poi, args.POI_name, data, database, plots_output_dir, pdb_file)
 
     # Write the text file with interacting proteins above the confidence threshold
-    output_file_path = write_interacting_proteins_to_file(args.poi, args.POI_name, data, database, args.cutoff, output_dir)
+    output_file_path = write_interacting_proteins_to_file(args.poi, args.POI_name, data, database, args.cutoff, hits_output_dir)
 
     # Write the POI to a text file
-    poi_file_path = write_poi_to_file(args.poi, args.POI_name, output_dir)
+    poi_file_path = write_poi_to_file(args.poi, args.POI_name, hits_output_dir)
 
     # Generate and print the shell command
     generate_shell_command(poi_file_path, output_file_path, args.poi, args.POI_name, args.cutoff)
 
     # If requested, generate ChimeraX script
     if args.chimeraX:
-        chimeraX_script(args.poi, precomputed_dir, chimerax_output_dir, available_pdbs, args.POI_name, args.local_path)
+        chimeraX_script(args.poi, precomputed_dir, chimerax_output_dir, available_pdbs, args.POI_name, args.local_PDB_path)
