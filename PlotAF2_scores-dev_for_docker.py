@@ -14,6 +14,10 @@ import tqdm
 from tabulate import tabulate
 import logging
 
+
+#Directory on /resourced where PDBs are available:
+HOST_PDB_PATH = '/Users/matthias.vorlaender/Downloads/PDBs'
+
 # Default root directory for all input data inside the container
 DEFAULT_ROOT_DIR = '/usr/src/app/input_data'
 
@@ -25,7 +29,7 @@ CHIMERAX_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'ChimeraX')
 TABLES_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'tables')
 LOGS_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'logs')
 PDBS_OUTPUT_DIR = os.path.join(CHIMERAX_OUTPUT_DIR, 'PDBs')
-HOST_PDB_PATH = '/Users/matthias.vorlaender/Downloads/PDBs'
+
 # Ensure necessary directories exist
 os.makedirs(LOGS_OUTPUT_DIR, exist_ok=True)
 os.makedirs(PDBS_OUTPUT_DIR, exist_ok=True)
@@ -229,7 +233,7 @@ def generate_copy_commands(available_pdbs, output_file_path):
             # Check if the file doesn't already exist before copying
             command = f"[ ! -f '{dest_path}' ] && cp -v '{source_path}' '.{dest_path}'\n"
             f.write(command)
-    log_and_print(f"Generated copy commands script at .{output_file_path}")
+    #log_and_print(f"Generated copy commands script at .{output_file_path}")
 
 # Optimized plotting function with UniProt descriptions for proteins above a set threshold
 def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, file_path, output_dir, pdb_file_path, labelling_threshold, width, height):
@@ -329,6 +333,17 @@ def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, fil
     
     return available_pdbs
 
+#Generate command for Dominiks AF screening
+def generate_shell_command(poi_file_path, output_file_path, poi_uniprot_id, POI_name, confidence_threshold):
+    command = (f"/resources/colabfold/software/ht-colabfold/alphafold_batch.sh -1 .{poi_file_path} -2 .{output_file_path} -O $PWD{DEFAULT_OUTPUT_DIR}/screens/{poi_uniprot_id}_{POI_name}_vs_hits_above_{confidence_threshold}")
+    
+    # Print the command (but do not execute it)
+    log_and_print("\nNote that the plot shows available confidence scores, but most will lack an associated PDB. To re-compute the structures of all hits above your cutoff using Dominik's script, execute the following command:")
+    log_and_print("\n ###########BEGIN COMMAND###########")   
+    log_and_print("\n")
+    log_and_print(command)
+    log_and_print("\n ###########END COMMAND###########")
+    log_and_print("\n")
 
 # Main execution logic
 if __name__ == "__main__":
@@ -366,14 +381,18 @@ if __name__ == "__main__":
     generate_copy_commands(available_pdbs, copy_commands_file_path)
 
     # Provide instructions for running the generated shell script
-    log_and_print(f"To copy the required PDB files, please run the following command on the host:\n")
-    log_and_print(f"sh .{copy_commands_file_path}\n")
+    #log_and_print(f"To copy the required PDB files, please run the following command on the host:\n")
+    #log_and_print(f"sh .{copy_commands_file_path}\n")
 
     # Write the text file with interacting proteins above the confidence threshold
     output_file_path = write_interacting_proteins_to_file(args.poi, args.POI_name, data, database, args.cutoff, DEFAULT_OUTPUT_DIR)
 
     # Write the POI to a text file
     poi_file_path = write_poi_to_file(args.poi, args.POI_name, DEFAULT_OUTPUT_DIR)
+    
+    # Generate and log_and_print the shell command
+    generate_shell_command(poi_file_path, output_file_path, args.poi, args.POI_name, args.cutoff)
+
 
     # Generate ChimeraX script if requested
     if args.chimeraX:
