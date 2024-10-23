@@ -16,7 +16,7 @@ import logging
 
 
 #Directory on /resourced where PDBs are available:
-HOST_PDB_PATH = '/Users/matthias.vorlaender/Downloads/PDBs'
+HOST_PDB_PATH = '/resources/AF2_PPI_tools/PDBs/'
 
 # Default root directory for all input data inside the container
 DEFAULT_ROOT_DIR = '/usr/src/app/input_data'
@@ -31,8 +31,13 @@ LOGS_OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, 'logs')
 PDBS_OUTPUT_DIR = os.path.join(CHIMERAX_OUTPUT_DIR, 'PDBs')
 
 # Ensure necessary directories exist
+os.makedirs(PLOTS_OUTPUT_DIR, exist_ok=True)
+os.makedirs(HITS_OUTPUT_DIR, exist_ok=True)
 os.makedirs(LOGS_OUTPUT_DIR, exist_ok=True)
+os.makedirs(TABLES_OUTPUT_DIR, exist_ok=True)
+os.makedirs(CHIMERAX_OUTPUT_DIR, exist_ok=True)
 os.makedirs(PDBS_OUTPUT_DIR, exist_ok=True)
+
 
 # Logging setup
 def setup_logging(poi_uniprot_id, confidence_threshold):
@@ -212,14 +217,24 @@ def read_pdb_availability(pdb_file_path):
     with open(pdb_file_path, 'r') as f:
         pdb_lines = f.readlines()
     pdb_uniprot_pairs = set()
+    
     for line in pdb_lines:
         parts = line.strip().split('__')
         if len(parts) == 2:
-            uniprot1 = parts[0].split('_')[0]
-            uniprot2 = parts[1].split('_')[0]
+            uniprot1_parts = parts[0].split('_')
+            uniprot2_parts = parts[1].split('_')
+            
+            # Take the first part (the UniProt ID) for each
+            uniprot1 = uniprot1_parts[0]
+            uniprot2 = uniprot2_parts[0]
+            
+            # Add both (uniprot1, uniprot2) and (uniprot2, uniprot1) to the set to ensure all combinations are covered
             pdb_uniprot_pairs.add((uniprot1, uniprot2))
             pdb_uniprot_pairs.add((uniprot2, uniprot1))
+            
+            # Append the parsed PDB file information
             pdb_files.append((uniprot1, uniprot2, line.strip()))
+
     log_and_print(f"Predictions with available PDBs loaded")
     return pdb_uniprot_pairs, pdb_files
 
@@ -255,9 +270,9 @@ def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, fil
     def check_pdb_availability(row, poi_id, pdb_pairs, pdb_files):
         other_protein_id = row['Other_Protein'].split('_')[0]
         for pdb_entry in pdb_files:
-            if (other_protein_id, poi_id) in pdb_pairs or (poi_id, other_protein_id) in pdb_pairs:
-                if (pdb_entry[0], pdb_entry[1]) == (other_protein_id, poi_id) or (pdb_entry[1], pdb_entry[0]) == (poi_id, other_protein_id):
-                    return True, pdb_entry[2]
+            # Ensure the match regardless of the order of proteins
+            if (poi_id in [pdb_entry[0], pdb_entry[1]]) and (other_protein_id in [pdb_entry[0], pdb_entry[1]]):
+                return True, pdb_entry[2]
         return False, "N/A"
     
     predictions['PDB_Available'], predictions['PDB_File'] = zip(*predictions.apply(lambda row: check_pdb_availability(row, poi_uniprot_id, pdb_uniprot_pairs, pdb_files), axis=1))
