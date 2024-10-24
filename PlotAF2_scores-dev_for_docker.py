@@ -13,11 +13,12 @@ import requests
 import tqdm
 from tabulate import tabulate
 import logging
+import re
+
 
 
 #Directory on /resourced where PDBs are available:
 HOST_PDB_PATH = '/resources/AF2_PPI_tools/PDBs/'
-
 # Default root directory for all input data inside the container
 DEFAULT_ROOT_DIR = '/usr/src/app/input_data'
 
@@ -121,17 +122,23 @@ def write_poi_to_file(poi_uniprot_id, POI_name, output_dir):
     #log_and_print(f"POI text file saved to .{poi_output_file_path}")
     return poi_output_file_path
 
+
 def chimeraX_script(poi_uniprot_id, output_dir, available_pdbs, POI_name):
+    # Initialize the script with opening the Alphafold model for POI
+    chimerax_script = [
+        f"#open Alphafold model for the POI using its uniprot ID",
+        f"alphafold fetch {poi_uniprot_id}",
+        f"cd PDBs"
+    ]
 
-    chimerax_script = [f"#open Alphafold model for the POI using its uniprot ID",
-                       f"alphafold fetch {poi_uniprot_id}",
-                       f"cd PDBs"]
-
-    # Add commands to open available PDBs
+    # Add commands to open available PDBs, one per line
     model_index = 2
-    for pdb_file in available_pdbs['PDB_File']:
-        chimerax_script.append(f"open {pdb_file}")
-        model_index += 1
+    for pdb_files in available_pdbs['PDB_File']:
+        # If multiple PDB files are available for the same interaction, split and add each
+        pdb_list = pdb_files.split(', ')
+        for pdb_file in pdb_list:
+            chimerax_script.append(f"open {pdb_file}")
+            model_index += 1
 
     # Add commands to align PDBs to the reference Alphafold model
     for i in range(2, model_index):
@@ -151,14 +158,16 @@ def chimeraX_script(poi_uniprot_id, output_dir, available_pdbs, POI_name):
     # Add color settings for POI and interactors
     model_index = 2
     for i, row in available_pdbs.iterrows():
-        pdb_file = row['PDB_File']
-        if poi_uniprot_id in pdb_file.split('__')[0]:
-            chimerax_script.append(f"color #{model_index}/A rebecca purple")
-            chimerax_script.append(f"color #{model_index}/B yellow")
-        else:
-            chimerax_script.append(f"color #{model_index}/B rebecca purple")
-            chimerax_script.append(f"color #{model_index}/A yellow")
-        model_index += 1
+        pdb_files = row['PDB_File']
+        pdb_list = pdb_files.split(', ')
+        for pdb_file in pdb_list:
+            if poi_uniprot_id in pdb_file.split('__')[0]:
+                chimerax_script.append(f"color #{model_index}/A rebecca purple")
+                chimerax_script.append(f"color #{model_index}/B yellow")
+            else:
+                chimerax_script.append(f"color #{model_index}/B rebecca purple")
+                chimerax_script.append(f"color #{model_index}/A yellow")
+            model_index += 1
 
     # Write the ChimeraX script to a file
     chimerax_file_name = f"{poi_uniprot_id}_{POI_name}_chimerax_script.cxc"
@@ -211,74 +220,91 @@ def write_hits_to_html(predictions, output_dir, poi_uniprot_id, POI_name, confid
         f.write("</body></html>")
     log_and_print(f"HTML table with hits above cutoff saved to .{output_file_path}")
 
-# Function to read PDB availability from a text file
-def read_pdb_availability(pdb_file_path):
-    pdb_files = []
-    with open(pdb_file_path, 'r') as f:
-        pdb_lines = f.readlines()
-    pdb_uniprot_pairs = set()
-    
-    for line in pdb_lines:
-        parts = line.strip().split('__')
-        if len(parts) == 2:
-            uniprot1_parts = parts[0].split('_')
-            uniprot2_parts = parts[1].split('_')
-            
-            # Take the first part (the UniProt ID) for each
-            uniprot1 = uniprot1_parts[0]
-            uniprot2 = uniprot2_parts[0]
-            
-            # Add both (uniprot1, uniprot2) and (uniprot2, uniprot1) to the set to ensure all combinations are covered
-            pdb_uniprot_pairs.add((uniprot1, uniprot2))
-            pdb_uniprot_pairs.add((uniprot2, uniprot1))
-            
-            # Append the parsed PDB file information
-            pdb_files.append((uniprot1, uniprot2, line.strip()))
+# Function to check PDB availability with added debug information
 
-    log_and_print(f"Predictions with available PDBs loaded")
-    return pdb_uniprot_pairs, pdb_files
+
+def read_pdb_availability(pdb_file_path, poi_uniprot_id):
+    pdb_files = []
+
+    with open(pdb_file_path, 'r') as f:
+        for line in f:
+            if poi_uniprot_id in line:
+                pdb_files.append(line.strip())
+
+    # Log each PDB entry that was found
+    #for pdb_file in pdb_files:
+        #log_and_print(f"Found PDB entry containing POI ({poi_uniprot_id}): {pdb_file}")
+
+    log_and_print(f"Number of PDB entries found containing POI ({poi_uniprot_id}): {len(pdb_files)}")
+    return pdb_files
+
+
 
 # Function to generate copy commands for PDB files and save them to a script
 def generate_copy_commands(available_pdbs, output_file_path):
     available_pdb_filenames = available_pdbs['PDB_File'].unique()
     with open(output_file_path, 'w') as f:
-        for pdb_filename in available_pdb_filenames:
-            source_path = os.path.join(HOST_PDB_PATH, pdb_filename)
-            dest_path = os.path.join(PDBS_OUTPUT_DIR, pdb_filename)
-            # Check if the file doesn't already exist before copying
-            command = f"[ ! -f '{dest_path}' ] && cp -v '{source_path}' '.{dest_path}'\n"
-            f.write(command)
-    #log_and_print(f"Generated copy commands script at .{output_file_path}")
+        for pdb_files in available_pdb_filenames:
+            # Split if there are multiple PDB files separated by commas
+            pdb_list = pdb_files.split(', ')
+            for pdb_filename in pdb_list:
+                source_path = os.path.join(HOST_PDB_PATH, pdb_filename)
+                dest_path = os.path.join(PDBS_OUTPUT_DIR, pdb_filename)
+                # Check if the file doesn't already exist before copying
+                command = f"[ ! -f '.{dest_path}' ] && cp -v '{source_path}' '.{dest_path}'\n"
+                f.write(command)
+    # Log the generated copy commands script
+    log_and_print(f"Generated copy commands script at .{output_file_path}")
 
-# Optimized plotting function with UniProt descriptions for proteins above a set threshold
+# Optimized plotting function with added debugging to verify PDB availability
 def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, file_path, output_dir, pdb_file_path, labelling_threshold, width, height):
     predictions = get_predictions_for_poi(poi_uniprot_id, data)
     log_and_print(f"Number of predictions for {poi_uniprot_id} in the database: {len(predictions)}")
     predictions = apply_density_based_jitter(predictions, 'Score')
     
     # Read PDB availability
-    pdb_uniprot_pairs, pdb_files = read_pdb_availability(pdb_file_path)
+    pdb_dict = read_pdb_availability(pdb_file_path, poi_uniprot_id)
 
-    
     # Get descriptions above the specified threshold
-    descriptions = get_uniprot_descriptions_above_threshold(predictions, labelling_threshold)
+    descriptions = get_uniprot_descriptions_above_threshold(predictions, args.labelling_threshold)
     
     # Map descriptions back to the DataFrame (show "Description not found" for others)
     predictions['Description'] = predictions['Other_Protein'].map(lambda x: descriptions.get(x, "Description not found"))
     
     # Add PDB availability information with improved matching logic
-    def check_pdb_availability(row, poi_id, pdb_pairs, pdb_files):
-        other_protein_id = row['Other_Protein'].split('_')[0]
+    def check_pdb_availability(row, poi_id, pdb_files):
+        # Use the entire Other_Protein value without stripping tags
+        other_protein_id = row['Other_Protein'].strip()
+        poi_id = poi_id.strip()
+
+        # Define a regex to match both POI and the other protein in any order
+        escaped_poi = re.escape(poi_id)
+        escaped_other_protein = re.escape(other_protein_id)
+
+        # Regex pattern to match both POI and the other protein, regardless of order
+        pattern = re.compile(rf"({escaped_poi}.*{escaped_other_protein})|({escaped_other_protein}.*{escaped_poi})")
+
+        # Collect all matching PDB entries
+        matching_pdbs = []
         for pdb_entry in pdb_files:
-            # Ensure the match regardless of the order of proteins
-            if (poi_id in [pdb_entry[0], pdb_entry[1]]) and (other_protein_id in [pdb_entry[0], pdb_entry[1]]):
-                return True, pdb_entry[2]
-        return False, "N/A"
-    
-    predictions['PDB_Available'], predictions['PDB_File'] = zip(*predictions.apply(lambda row: check_pdb_availability(row, poi_uniprot_id, pdb_uniprot_pairs, pdb_files), axis=1))
+            if pattern.search(pdb_entry):
+                matching_pdbs.append(pdb_entry)
+
+        # Log the matches found, if any
+        if matching_pdbs:
+            #log_and_print(f"Matching PDBs found for POI: {poi_id} and interacting protein: {other_protein_id}: {', '.join(matching_pdbs)}")
+            return True, ', '.join(matching_pdbs)  # Return all matches as a comma-separated string
+        else:
+            #log_and_print(f"No matching PDB found for POI: {poi_id} and interacting protein: {other_protein_id}")
+            return False, "N/A"
+
+
+
+    predictions['PDB_Available'], predictions['PDB_File'] = zip(*predictions.apply(lambda row: check_pdb_availability(row, poi_uniprot_id, pdb_dict), axis=1))
     
     # Count how many predictions are listed in the PDB availability file
     pdb_available_count = predictions['PDB_Available'].sum()
+    
     log_and_print(f"Number of predictions for {poi_uniprot_id} with available PDB files: {pdb_available_count}")
   
     # Plot all predictions with a single color scale
@@ -333,10 +359,10 @@ def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, fil
     save_plot_as_html(fig, PLOTS_OUTPUT_DIR, file_name)
 
     # Save the table of predictions as an HTML file
-    write_hits_to_html(predictions, TABLES_OUTPUT_DIR, poi_uniprot_id, POI_name, labelling_threshold)
+    write_hits_to_html(predictions, TABLES_OUTPUT_DIR, poi_uniprot_id, POI_name, args.cutoff)
 
     # Print a message indicating which predictions above the cutoff have pre-computed results available
-    available_pdbs = predictions[predictions['PDB_Available'] & (predictions['Score'] > labelling_threshold)]
+    available_pdbs = predictions[predictions['PDB_Available'] & (predictions['Score'] > args.cutoff)]
     
     if not available_pdbs.empty:
         log_and_print("The following interacting proteins have pre-computed PDB results available:")
@@ -347,6 +373,7 @@ def plot_poi_predictions_with_density_jitter(poi_uniprot_id, POI_name, data, fil
         log_and_print("No pre-computed PDB results are available for predictions above the cutoff.")
     
     return available_pdbs
+
 
 #Generate command for Dominiks AF screening
 def generate_shell_command(poi_file_path, output_file_path, poi_uniprot_id, POI_name, confidence_threshold):
@@ -371,7 +398,8 @@ if __name__ == "__main__":
     parser.add_argument('--plot_width', type=int, default=1200, help='Width of the plot (default: 1200)')
     parser.add_argument('--plot_height', type=int, default=800, help='Height of the plot (default: 800)')
 
-    args = parser.parse_args()
+    args = parser.parse_args()  
+    confidence_threshold = args.cutoff
 
     # Set up logging
     log_file = setup_logging(args.poi, args.cutoff)
@@ -388,7 +416,7 @@ if __name__ == "__main__":
 
     # Run the plot function
     log_and_print("\n")
-    available_pdbs = plot_poi_predictions_with_density_jitter(args.poi, args.POI_name, data, database, DEFAULT_OUTPUT_DIR, pdb_file, labelling_threshold=args.labelling_threshold, width=args.plot_width, height=args.plot_height)
+    available_pdbs = plot_poi_predictions_with_density_jitter(args.poi, args.POI_name, data, database, DEFAULT_OUTPUT_DIR, pdb_file, args.cutoff, width=args.plot_width, height=args.plot_height)
 
     # Generate copy commands for available PDB files
     # Generate a shell script to copy PDB files for available PDBs
